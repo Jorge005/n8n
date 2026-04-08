@@ -25,7 +25,10 @@ import { N8NCheckpointStorage } from './integrations/n8n-checkpoint-storage';
 import { AgentRepository } from './repositories/agent.repository';
 import type { WorkflowToolDescriptor } from './types';
 
+import { setSchemaBaseDirs } from '@n8n/workflow-sdk';
+
 import { ActiveExecutions } from '@/active-executions';
+import { resolveBuiltinNodeDefinitionDirs } from '@/modules/instance-ai/node-definition-resolver';
 import { resolveBuiltinNodeDefinitionDirs } from '@/modules/instance-ai/node-definition-resolver';
 import { CredentialsService } from '@/credentials/credentials.service';
 import { ConflictError } from '@/errors/response-errors/conflict.error';
@@ -384,8 +387,10 @@ export class AgentsService {
 			const { createSearchToolsTool, createGetNodeSchemaTool, createRunNodeTool } = await import(
 				'./integrations/node-execution-tools'
 			);
-
 			const { nodes } = await this.loadNodesAndCredentials.collectTypes();
+			const nodeDefDirs = resolveBuiltinNodeDefinitionDirs();
+			if (nodeDefDirs.length > 0) setSchemaBaseDirs(nodeDefDirs);
+
 			agent.tool(createSearchToolsTool(nodes, credentialProvider));
 			agent.tool(createGetNodeSchemaTool(nodes));
 			agent.tool(createRunNodeTool(this.ephemeralNodeExecutor, projectId));
