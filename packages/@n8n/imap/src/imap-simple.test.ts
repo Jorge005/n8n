@@ -57,17 +57,19 @@ describe('ImapSimple', () => {
 			expect(onMail).toHaveBeenCalledWith(3);
 		});
 
-		it('should suppress ECONNRESET errors if ending', () => {
+		it('should suppress errors after end() by removing all listeners', () => {
 			const { imapSimple, mockImap } = createImap();
 			const onError = vi.fn();
 			imapSimple.on('error', onError);
 			imapSimple.end();
 
+			// After end(), all forwarded listeners (including error) are removed.
+			// A no-op error handler on the raw imap prevents unhandled throws.
 			mockImap.emit('error', { message: 'reset', code: 'ECONNRESET' });
 			expect(onError).not.toHaveBeenCalled();
 		});
 
-		it('should forward ECONNRESET errors if not ending', () => {
+		it('should forward all errors before end() is called', () => {
 			const { imapSimple, mockImap } = createImap();
 			const onError = vi.fn();
 			imapSimple.on('error', onError);
@@ -75,6 +77,29 @@ describe('ImapSimple', () => {
 			const error = { message: 'reset', code: 'ECONNRESET' };
 			mockImap.emit('error', error);
 			expect(onError).toHaveBeenCalledWith(error);
+		});
+	});
+
+	describe('event listener cleanup', () => {
+		it('should remove forwarded event listeners from underlying imap on end()', () => {
+			const { imapSimple, mockImap } = createImap();
+
+			// Verify listeners were added by ImapSimple constructor
+			expect(mockImap.listenerCount('mail')).toBe(1);
+			expect(mockImap.listenerCount('error')).toBe(1);
+
+			imapSimple.end();
+
+			// All forwarded event listeners should be cleaned up
+			// to prevent memory leaks when connections are replaced
+			expect(mockImap.listenerCount('mail')).toBe(0);
+			expect(mockImap.listenerCount('close')).toBe(0);
+			expect(mockImap.listenerCount('alert')).toBe(0);
+
+			// A no-op error handler remains to suppress errors during disconnect
+			// (e.g. ECONNRESET), preventing unhandled error throws
+			expect(mockImap.listenerCount('error')).toBe(1);
+			expect(() => mockImap.emit('error', new Error('ECONNRESET'))).not.toThrow();
 		});
 	});
 
