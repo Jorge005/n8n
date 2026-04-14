@@ -23,7 +23,9 @@ import type {
 	GmailWorkflowStaticData,
 	GmailWorkflowStaticDataDictionary,
 	Label,
+	ListMessage,
 	Message,
+	MessageBookkeeping,
 	MessageListResponse,
 } from './types';
 
@@ -33,7 +35,7 @@ export class GmailTrigger implements INodeType {
 		name: 'gmailTrigger',
 		icon: 'file:gmail.svg',
 		group: ['trigger'],
-		version: [1, 1.1, 1.2, 1.3],
+		version: [1, 1.1, 1.2, 1.3, 2],
 		description:
 			'Fetches emails from Gmail and starts the workflow on specified polling intervals.',
 		subtitle: '={{"Gmail Trigger"}}',
@@ -112,6 +114,23 @@ export class GmailTrigger implements INodeType {
 				builderHint: {
 					message:
 						'Set to false when the email body is needed for AI analysis, summarization, or content processing. When true, only returns snippet (preview text). When false, returns full email with {id, threadId, labelIds, headers, html, text, textAsHtml, subject, date, to, from, messageId, replyTo}.',
+				},
+			},
+			{
+				displayName: 'Max Emails per Poll',
+				name: 'maxResults',
+				type: 'number',
+				default: 10,
+				typeOptions: {
+					minValue: 1,
+					maxValue: 50,
+				},
+				description:
+					'Maximum number of emails to fetch each time the node polls for new messages. If more emails arrive between polls, the remaining ones will be picked up in subsequent polls.',
+				displayOptions: {
+					show: {
+						'@version': [{ _cnd: { gte: 2 } }],
+					},
 				},
 			},
 			{
@@ -285,11 +304,103 @@ export class GmailTrigger implements INodeType {
 
 		const options = this.getNodeParameter('options', {}) as GmailTriggerOptions;
 		const filters = this.getNodeParameter('filters', {}) as GmailTriggerFilters;
+		const simple = this.getNodeParameter('simple') as boolean;
+
+		const isV2 = node.typeVersion >= 2 && this.getMode() !== 'manual';
+		const maxResults = isV2 ? (this.getNodeParameter('maxResults', 10) as number) : Infinity;
 
 		let responseData: INodeExecutionData[] = [];
-		const allFetchedMessages: Message[] = [];
+		const allFetchedMessages: MessageBookkeeping[] = [];
+
+		const buildFetchQs = (): IDataObject => {
+			const qs: IDataObject = {};
+			if (simple) {
+				qs.format = 'metadata';
+				qs.metadataHeaders = ['From', 'To', 'Cc', 'Bcc', 'Subject'];
+			} else {
+				qs.format = 'raw';
+			}
+			return qs;
+		};
+
+		let includeDrafts = false;
+		if (node.typeVersion > 1.1) {
+			includeDrafts = filters.includeDrafts ?? false;
+		} else {
+			includeDrafts = filters.includeDrafts ?? true;
+		}
+
+		const fetchAndProcessMessage = async (
+			messageId: string,
+			fetchQs: IDataObject,
+		): Promise<void> => {
+			const fullMessage = (await googleApiRequest.call(
+				this,
+				'GET',
+				`/gmail/v1/users/me/messages/${messageId}`,
+				{},
+				fetchQs,
+			)) as Message;
+
+			allFetchedMessages.push({
+				id: fullMessage.id,
+				internalDate: fullMessage.internalDate,
+				date: fullMessage.date,
+				headers: fullMessage.headers?.date ? { date: fullMessage.headers.date } : undefined,
+			});
+
+			if (!includeDrafts && fullMessage.labelIds?.includes('DRAFT')) {
+				return;
+			}
+			if (
+				node.typeVersion > 1.2 &&
+				fullMessage.labelIds?.includes('SENT') &&
+				!fullMessage.labelIds?.includes('INBOX')
+			) {
+				return;
+			}
+
+			if (!simple) {
+				const dataPropertyNameDownload = options.dataPropertyAttachmentsPrefixName || 'attachment_';
+				const parsed = await parseRawEmail.call(this, fullMessage, dataPropertyNameDownload);
+				responseData.push(parsed);
+			} else {
+				responseData.push({ json: fullMessage });
+			}
+		};
 
 		try {
+			let budget = maxResults;
+
+			// V2: Process pending messages from previous poll first.
+			// These are IDs that were listed but not fetched last time due to maxResults.
+			const pendingIds = nodeStaticData.pendingMessageIds ?? [];
+			if (isV2 && pendingIds.length > 0) {
+				const idsToFetch = pendingIds.slice(0, budget);
+				nodeStaticData.pendingMessageIds = pendingIds.slice(budget);
+				const fetchQs = buildFetchQs();
+
+				for (const id of idsToFetch) {
+					await fetchAndProcessMessage(id, fetchQs);
+				}
+
+				budget -= idsToFetch.length;
+
+				// If we still have pending IDs, don't list new messages yet.
+				if (nodeStaticData.pendingMessageIds.length > 0) {
+					if (simple && responseData.length > 0) {
+						responseData = this.helpers.returnJsonArray(
+							await simplifyOutput.call(
+								this,
+								responseData.map((item) => item.json),
+							),
+						);
+					}
+					return responseData.length > 0 ? [responseData] : null;
+				}
+			}
+
+			// List new messages from Gmail.
 			const qs: IDataObject = {};
 			const allFilters: GmailTriggerFilters = { ...filters, receivedAfter: startDate };
 
@@ -308,66 +419,44 @@ export class GmailTrigger implements INodeType {
 				qs,
 			);
 
-			const messages = messagesResponse.messages ?? [];
+			let messages: ListMessage[] = messagesResponse.messages ?? [];
 
-			if (!messages.length) {
+			if (!messages.length && !allFetchedMessages.length) {
 				return null;
 			}
 
-			const simple = this.getNodeParameter('simple') as boolean;
-
-			if (simple) {
-				qs.format = 'metadata';
-				qs.metadataHeaders = ['From', 'To', 'Cc', 'Bcc', 'Subject'];
-			} else {
-				qs.format = 'raw';
-			}
-
-			let includeDrafts = false;
-			if (node.typeVersion > 1.1) {
-				includeDrafts = filters.includeDrafts ?? false;
-			} else {
-				includeDrafts = filters.includeDrafts ?? true;
-			}
-
-			delete qs.includeDrafts;
-
-			for (const message of messages) {
-				const fullMessage = (await googleApiRequest.call(
-					this,
-					'GET',
-					`/gmail/v1/users/me/messages/${message.id}`,
-					{},
-					qs,
-				)) as Message;
-
-				allFetchedMessages.push(fullMessage);
-
-				if (!includeDrafts) {
-					if (fullMessage.labelIds?.includes('DRAFT')) {
-						continue;
-					}
-				}
-				if (
-					node.typeVersion > 1.2 &&
-					fullMessage.labelIds?.includes('SENT') &&
-					!fullMessage.labelIds?.includes('INBOX')
-				) {
-					continue;
+			// V2: Filter out messages already processed in previous polls at the ID level.
+			// This prevents wasting API calls on already-processed messages and avoids
+			// duplicates when Gmail's `after:` query returns messages at the boundary.
+			if (isV2) {
+				const possibleDuplicates = new Set(nodeStaticData.possibleDuplicates ?? []);
+				if (possibleDuplicates.size > 0) {
+					messages = messages.filter((m) => !possibleDuplicates.has(m.id));
 				}
 
-				if (!simple) {
-					const dataPropertyNameDownload =
-						options.dataPropertyAttachmentsPrefixName || 'attachment_';
-
-					const parsed = await parseRawEmail.call(this, fullMessage, dataPropertyNameDownload);
-					responseData.push(parsed);
-				} else {
-					responseData.push({ json: fullMessage });
+				if (!messages.length && !allFetchedMessages.length) {
+					return null;
 				}
 			}
 
-			if (simple) {
+			// V2: Take only what fits in the remaining budget, store the rest as pending.
+			let messagesToProcess = messages;
+			if (isV2 && messages.length > budget) {
+				messagesToProcess = messages.slice(0, budget);
+				nodeStaticData.pendingMessageIds = messages.slice(budget).map((m) => m.id);
+			}
+
+			if (messagesToProcess.length > 0) {
+				const fetchQs = buildFetchQs();
+				Object.assign(fetchQs, options);
+				delete fetchQs.includeDrafts;
+
+				for (const message of messagesToProcess) {
+					await fetchAndProcessMessage(message.id, fetchQs);
+				}
+			}
+
+			if (simple && responseData.length > 0) {
 				responseData = this.helpers.returnJsonArray(
 					await simplifyOutput.call(
 						this,
@@ -396,7 +485,7 @@ export class GmailTrigger implements INodeType {
 
 		const emailsWithInvalidDate = new Set<string>();
 
-		const getEmailDateAsSeconds = (email: Message): number => {
+		const getEmailDateAsSeconds = (email: MessageBookkeeping): number => {
 			let date;
 
 			if (email.internalDate) {
@@ -425,16 +514,29 @@ export class GmailTrigger implements INodeType {
 			return emailDate <= lastEmailDate ? duplicates.concat(message.id) : duplicates;
 		}, Array.from(emailsWithInvalidDate));
 
-		const possibleDuplicates = new Set(nodeStaticData.possibleDuplicates ?? []);
-		if (possibleDuplicates.size > 0) {
-			responseData = responseData.filter(({ json }) => {
-				if (!json || typeof json.id !== 'string') return false;
-				return !possibleDuplicates.has(json.id);
-			});
+		// Filter duplicates from response. Gmail's `after:` query is inclusive at the
+		// second boundary, so messages at the lastTimeChecked timestamp can reappear.
+		{
+			const prevDuplicates = new Set(nodeStaticData.possibleDuplicates ?? []);
+			if (prevDuplicates.size > 0) {
+				responseData = responseData.filter(({ json }) => {
+					if (!json || typeof json.id !== 'string') return false;
+					return !prevDuplicates.has(json.id);
+				});
+			}
 		}
 
-		nodeStaticData.possibleDuplicates = nextPollPossibleDuplicates;
-		nodeStaticData.lastTimeChecked = lastEmailDate ?? +startDate;
+		const effectiveLastTimeChecked = Math.floor(Math.max(lastEmailDate, +startDate)) || +startDate;
+
+		// When lastTimeChecked didn't advance (e.g., only older pending messages were processed),
+		// preserve existing possibleDuplicates — they're still at the query boundary.
+		if (effectiveLastTimeChecked === +startDate && nodeStaticData.possibleDuplicates?.length) {
+			const merged = new Set([...nodeStaticData.possibleDuplicates, ...nextPollPossibleDuplicates]);
+			nodeStaticData.possibleDuplicates = Array.from(merged);
+		} else {
+			nodeStaticData.possibleDuplicates = nextPollPossibleDuplicates;
+		}
+		nodeStaticData.lastTimeChecked = effectiveLastTimeChecked;
 
 		if (Array.isArray(responseData) && responseData.length) {
 			return [responseData];
