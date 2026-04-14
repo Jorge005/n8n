@@ -19,6 +19,7 @@ import { usePageRedirectionHelper } from '@/app/composables/usePageRedirectionHe
 import { useKeybindings } from '@/app/composables/useKeybindings';
 import { useSidebarLayout } from '@/app/composables/useSidebarLayout';
 import { useSettingsItems } from '@/app/composables/useSettingsItems';
+import { useAiGateway } from '@/app/composables/useAiGateway';
 import MainSidebarHeader from '@/app/components/MainSidebarHeader.vue';
 import BottomMenu from '@/app/components/BottomMenu.vue';
 import MainSidebarSourceControl from '@/app/components/MainSidebarSourceControl.vue';
@@ -27,6 +28,7 @@ import ResourceCenterTooltip from '@/experiments/resourceCenter/components/Resou
 import { useResourceCenterStore } from '@/experiments/resourceCenter/stores/resourceCenter.store';
 import { RESOURCE_CENTER_EXPERIMENT, LOCAL_STORAGE_SIDEBAR_WIDTH } from '@/app/constants';
 import { useSidebarExpandedExperiment } from '@/experiments/sidebarExpanded';
+import { trackTemplatesClick, TemplateClickSource } from '@/experiments/utils';
 
 const cloudPlanStore = useCloudPlanStore();
 const rootStore = useRootStore();
@@ -59,6 +61,7 @@ const { isCollapsed, sidebarWidth, onResizeStart, onResize, onResizeEnd, toggleC
 	useSidebarLayout();
 
 const { settingsItems } = useSettingsItems();
+const { fetchCredits, isEnabled: isAiGatewayEnabled } = useAiGateway();
 
 // Component data
 const basePath = ref('');
@@ -237,6 +240,7 @@ watch(isCollapsed, () => {
 
 onMounted(() => {
 	basePath.value = rootStore.baseUrl;
+	if (isAiGatewayEnabled.value) void fetchCredits();
 
 	void nextTick(() => {
 		checkOverflow();
@@ -307,6 +311,9 @@ const handleSelect = (key: string) => {
 			trackHelpItemClick(key);
 			break;
 		}
+		case 'templates':
+			trackTemplatesClick(TemplateClickSource.sidebarButton);
+			break;
 		case 'insights':
 			telemetry.track('User clicked insights link from side menu');
 			break;
@@ -347,7 +354,7 @@ useKeybindings({
 			[$style.sideMenuCollapsed]: isCollapsed,
 		}"
 		:width="sidebarWidth"
-		:style="{ width: `${sidebarWidth}px` }"
+		:style="isCollapsed ? {} : { width: `${sidebarWidth}px` }"
 		:supported-directions="['right']"
 		:min-width="200"
 		:max-width="500"

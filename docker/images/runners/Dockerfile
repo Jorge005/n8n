@@ -1,4 +1,4 @@
-ARG NODE_VERSION=24.13.1
+ARG NODE_VERSION=24.14.1
 ARG PYTHON_VERSION=3.13
 
 # ==============================================================================
@@ -130,6 +130,8 @@ COPY --from=node-alpine /usr/local/bin/node /usr/local/bin/node
 # libstdc++ is required by Node
 # libc6-compat is required by task-runner-launcher
 RUN apk add --no-cache ca-certificates tini libstdc++ libc6-compat && \
+    apk upgrade --no-cache && \
+    pip install --no-cache-dir "pip>=26.0" && \
     apk del apk-tools
 
 # Bring corepack and pnpm over, to make the image easier to extend
