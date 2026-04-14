@@ -44,9 +44,8 @@ type ResourceSection = Exclude<ResourceItem['section'], undefined>;
 const searchQuery = ref('');
 const debouncedSearch = ref('');
 
-const searchPlaceholder = computed(
-	() =>
-		`${i18n.baseText('generic.search')} 1,243 ${i18n.baseText('experiments.resourceCenter.title').toLowerCase()}`,
+const searchPlaceholder = computed(() =>
+	i18n.baseText('experiments.resourceCenter.search.placeholder'),
 );
 const isDarkTheme = computed(() => uiStore.appliedTheme === 'dark');
 
