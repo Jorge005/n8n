@@ -10,7 +10,12 @@
 import fs from 'fs';
 import path from 'path';
 
-import type { WorkflowTestCaseResult, ScenarioResult } from '../types';
+import type {
+	MultiRunEvaluation,
+	ScenarioResult,
+	ScenarioAggregation,
+	TestCaseAggregation,
+} from '../types';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -26,36 +31,20 @@ function escapeHtml(str: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Scenario rendering
+// Scenario rendering (single run detail)
 // ---------------------------------------------------------------------------
 
-function renderScenario(sr: ScenarioResult, index: number): string {
+function renderScenarioRun(sr: ScenarioResult, id: string): string {
 	const icon = sr.success ? '&#10003;' : '&#10007;';
 	const statusClass = sr.success ? 'pass' : 'fail';
 
-	// Passing scenarios: compact one-liner with collapsible detail
-	if (sr.success) {
-		const summary = sr.reasoning ? sr.reasoning.slice(0, 150) : 'All checks passed';
-		return `<div class="scenario ${statusClass}">
-			<div class="scenario-header" onclick="this.parentElement.classList.toggle('expanded')">
-				<span class="scenario-icon ${statusClass}">${icon}</span>
-				<span class="scenario-name">${escapeHtml(sr.scenario.name)}</span>
-				<span class="scenario-summary-inline">${escapeHtml(summary)}${sr.reasoning && sr.reasoning.length > 150 ? '...' : ''}</span>
-			</div>
-			<div class="scenario-detail" id="scenario-${String(index)}">
-				${renderScenarioDetail(sr)}
-			</div>
-		</div>`;
-	}
-
-	// Failing scenarios: show error prominently, detail expanded by default
-	return `<div class="scenario ${statusClass} expanded">
+	return `<div class="scenario ${statusClass}${sr.success ? '' : ' expanded'}">
 		<div class="scenario-header" onclick="this.parentElement.classList.toggle('expanded')">
 			<span class="scenario-icon ${statusClass}">${icon}</span>
 			<span class="scenario-name">${escapeHtml(sr.scenario.name)}</span>
-			<span class="scenario-desc">${escapeHtml(sr.scenario.description)}</span>
+			${sr.success ? `<span class="scenario-summary-inline">${escapeHtml((sr.reasoning || 'All checks passed').slice(0, 150))}${sr.reasoning && sr.reasoning.length > 150 ? '...' : ''}</span>` : `<span class="scenario-desc">${escapeHtml(sr.scenario.description)}</span>`}
 		</div>
-		<div class="scenario-detail" id="scenario-${String(index)}">
+		<div class="scenario-detail" id="${id}">
 			${renderScenarioDetail(sr)}
 		</div>
 	</div>`;
@@ -187,10 +176,57 @@ function renderScenarioDetail(sr: ScenarioResult): string {
 }
 
 // ---------------------------------------------------------------------------
+// Scenario aggregation rendering (multi-run)
+// ---------------------------------------------------------------------------
+
+function renderScenarioAggregation(
+	sa: ScenarioAggregation,
+	tcIndex: number,
+	sIndex: number,
+	totalRuns: number,
+): string {
+	const allPass = sa.passCount === totalRuns;
+	const allFail = sa.passCount === 0;
+	const statusClass = allPass ? 'pass' : allFail ? 'fail' : 'mixed';
+	const icon = allPass ? '&#10003;' : allFail ? '&#10007;' : '&#9679;';
+
+	const passRatePct = Math.round(sa.passRate * 100);
+	const passAtN = Math.round((sa.passAtK[totalRuns - 1] ?? 0) * 100);
+	const passHatN = Math.round((sa.passHatK[totalRuns - 1] ?? 0) * 100);
+
+	let runsHtml = '';
+	for (let r = 0; r < sa.runs.length; r++) {
+		const sr = sa.runs[r];
+		const runIcon = sr.success ? '&#10003;' : '&#10007;';
+		const runStatus = sr.success ? 'pass' : 'fail';
+		runsHtml += `<details class="run-detail">
+			<summary><span class="scenario-icon ${runStatus}">${runIcon}</span> Run ${String(r + 1)}</summary>
+			<div class="run-detail-content">${renderScenarioDetail(sr)}</div>
+		</details>`;
+	}
+
+	return `<div class="scenario ${statusClass}${allFail ? ' expanded' : ''}">
+		<div class="scenario-header" onclick="this.parentElement.classList.toggle('expanded')">
+			<span class="scenario-icon ${statusClass}">${icon}</span>
+			<span class="scenario-name">${escapeHtml(sa.scenario.name)}</span>
+			<span class="pass-rate-inline">${String(sa.passCount)}/${String(totalRuns)} (${String(passRatePct)}%)</span>
+			<span class="badge badge-${passAtN >= 80 ? 'pass' : 'fail'}">pass@${String(totalRuns)}: ${String(passAtN)}%</span>
+			<span class="badge badge-${passHatN >= 80 ? 'pass' : 'fail'}">pass^${String(totalRuns)}: ${String(passHatN)}%</span>
+		</div>
+		<div class="scenario-detail" id="scenario-${String(tcIndex)}-${String(sIndex)}">
+			${runsHtml}
+		</div>
+	</div>`;
+}
+
+// ---------------------------------------------------------------------------
 // Workflow summary
 // ---------------------------------------------------------------------------
 
-function renderWorkflowSummary(result: WorkflowTestCaseResult): string {
+function renderWorkflowSummary(result: {
+	scenarioResults: ScenarioResult[];
+	workflowJson?: unknown;
+}): string {
 	const firstEval = result.scenarioResults[0]?.evalResult;
 
 	let nodesHtml = '';
@@ -226,7 +262,8 @@ function renderWorkflowSummary(result: WorkflowTestCaseResult): string {
 // Test case rendering
 // ---------------------------------------------------------------------------
 
-function renderTestCase(result: WorkflowTestCaseResult, tcIndex: number): string {
+function renderTestCaseSingleRun(tc: TestCaseAggregation, tcIndex: number): string {
+	const result = tc.runs[0];
 	const passCount = result.scenarioResults.filter((sr) => sr.success).length;
 	const totalCount = result.scenarioResults.length;
 	const allPass = passCount === totalCount && totalCount > 0;
@@ -244,24 +281,23 @@ function renderTestCase(result: WorkflowTestCaseResult, tcIndex: number): string
 	const prompt = result.testCase.prompt;
 	const truncatedPrompt = prompt.length > 100 ? prompt.slice(0, 100) + '...' : prompt;
 
-	// Inline scenario indicators for quick triage without expanding
 	const scenarioIndicators = result.scenarioResults
 		.map(
 			(sr) =>
-				`<span class="scenario-indicator ${sr.success ? 'pass' : 'fail'}" title="${escapeHtml(sr.scenario.name)}">${sr.success ? '✓' : '✗'} ${escapeHtml(sr.scenario.name)}</span>`,
+				`<span class="scenario-indicator ${sr.success ? 'pass' : 'fail'}" title="${escapeHtml(sr.scenario.name)}">${sr.success ? '\u2713' : '\u2717'} ${escapeHtml(sr.scenario.name)}</span>`,
 		)
 		.join(' ');
 
 	let scenariosHtml = '';
 	if (result.scenarioResults.length > 0) {
 		scenariosHtml = result.scenarioResults
-			.map((sr, i) => renderScenario(sr, tcIndex * 100 + i))
+			.map((sr, i) => renderScenarioRun(sr, `scenario-${String(tcIndex)}-${String(i)}`))
 			.join('');
 	} else if (!result.workflowBuildSuccess) {
 		const errorDetail = result.buildError
 			? `<div class="error-box">${escapeHtml(result.buildError)}</div>`
 			: '';
-		scenariosHtml = `<div class="muted">Workflow failed to build — no scenarios executed</div>${errorDetail}`;
+		scenariosHtml = `<div class="muted">Workflow failed to build \u2014 no scenarios executed</div>${errorDetail}`;
 	}
 
 	return `<div class="test-case ${statusClass}">
@@ -284,18 +320,157 @@ function renderTestCase(result: WorkflowTestCaseResult, tcIndex: number): string
 	</div>`;
 }
 
+function renderTestCaseMultiRun(
+	tc: TestCaseAggregation,
+	tcIndex: number,
+	totalRuns: number,
+): string {
+	const allPass = tc.scenarios.every((s) => s.passCount === totalRuns);
+	const anyPass = tc.scenarios.some((s) => s.passCount > 0);
+	const allBuilt = tc.buildSuccessCount === totalRuns;
+	const statusClass = allBuilt && allPass ? 'pass' : !anyPass ? 'fail' : 'mixed';
+
+	const buildBadge = `<span class="badge badge-${allBuilt ? 'pass' : 'fail'}">BUILT ${String(tc.buildSuccessCount)}/${String(totalRuns)}</span>`;
+
+	// Average pass@1 across scenarios as the headline metric
+	const totalScenarios = tc.scenarios.length;
+	const avgPassAtN =
+		totalScenarios > 0
+			? Math.round(
+					(tc.scenarios.reduce((sum, s) => sum + (s.passAtK[totalRuns - 1] ?? 0), 0) /
+						totalScenarios) *
+						100,
+				)
+			: 0;
+	const avgPassHatN =
+		totalScenarios > 0
+			? Math.round(
+					(tc.scenarios.reduce((sum, s) => sum + (s.passHatK[totalRuns - 1] ?? 0), 0) /
+						totalScenarios) *
+						100,
+				)
+			: 0;
+
+	const prompt = tc.testCase.prompt;
+	const truncatedPrompt = prompt.length > 100 ? prompt.slice(0, 100) + '...' : prompt;
+
+	const scenarioIndicators = tc.scenarios
+		.map((sa) => {
+			const p = sa.passCount;
+			const cls = p === totalRuns ? 'pass' : p > 0 ? 'mixed' : 'fail';
+			const sym = p === totalRuns ? '\u2713' : p > 0 ? '~' : '\u2717';
+			return `<span class="scenario-indicator ${cls}" title="${escapeHtml(sa.scenario.name)}: ${String(p)}/${String(totalRuns)}">${sym} ${escapeHtml(sa.scenario.name)}</span>`;
+		})
+		.join(' ');
+
+	const scenariosHtml = tc.scenarios
+		.map((sa, sIdx) => renderScenarioAggregation(sa, tcIndex, sIdx, totalRuns))
+		.join('');
+
+	return `<div class="test-case ${statusClass}">
+		<div class="test-case-header" onclick="this.parentElement.classList.toggle('expanded')">
+			<div class="test-case-title">
+				${buildBadge}
+				<span class="badge badge-${avgPassAtN >= 80 ? 'pass' : 'fail'}">pass@${String(totalRuns)}: ${String(avgPassAtN)}%</span>
+				<span class="badge badge-${avgPassHatN >= 80 ? 'pass' : 'fail'}">pass^${String(totalRuns)}: ${String(avgPassHatN)}%</span>
+				<span class="test-case-prompt">${escapeHtml(truncatedPrompt)}</span>
+			</div>
+			<div class="test-case-meta">
+				<span class="badge badge-tag">${escapeHtml(tc.testCase.complexity)}</span>
+			</div>
+			<div class="scenario-indicators">${scenarioIndicators}</div>
+		</div>
+		<div class="test-case-detail">
+			<details class="section"><summary>Prompt</summary><div class="prompt-text">${escapeHtml(prompt)}</div></details>
+			${scenariosHtml}
+		</div>
+	</div>`;
+}
+
 // ---------------------------------------------------------------------------
 // Full report
 // ---------------------------------------------------------------------------
 
-export function generateWorkflowReport(results: WorkflowTestCaseResult[]): string {
-	const totalTestCases = results.length;
-	const builtCount = results.filter((r) => r.workflowBuildSuccess).length;
-	const allScenarios = results.flatMap((r) => r.scenarioResults);
-	const passCount = allScenarios.filter((sr) => sr.success).length;
-	const failCount = allScenarios.length - passCount;
+export function generateWorkflowReport(evaluation: MultiRunEvaluation): string {
+	const { totalRuns, testCases } = evaluation;
+	const isMultiRun = totalRuns > 1;
+
+	const totalTestCases = testCases.length;
+	const allScenarios = testCases.flatMap((tc) => tc.scenarios);
 	const totalScenarios = allScenarios.length;
-	const passRate = totalScenarios > 0 ? Math.round((passCount / totalScenarios) * 100) : 0;
+
+	// Compute average pass@n and pass^n (k = n = totalRuns)
+	const avgPassAtN =
+		totalScenarios > 0
+			? Math.round(
+					(allScenarios.reduce((sum, s) => sum + (s.passAtK[totalRuns - 1] ?? 0), 0) /
+						totalScenarios) *
+						100,
+				)
+			: 0;
+	const avgPassHatN =
+		totalScenarios > 0
+			? Math.round(
+					(allScenarios.reduce((sum, s) => sum + (s.passHatK[totalRuns - 1] ?? 0), 0) /
+						totalScenarios) *
+						100,
+				)
+			: 0;
+
+	// Single-run fallback metrics (backward compatible)
+	const builtCount = testCases.filter((tc) => tc.buildSuccessCount > 0).length;
+
+	// Dashboard cards
+	let dashboardHtml: string;
+	if (isMultiRun) {
+		dashboardHtml = `
+		<div class="stat-card">
+			<div class="label">pass@${String(totalRuns)}</div>
+			<div class="value${avgPassAtN >= 80 ? ' pass' : avgPassAtN >= 50 ? ' mixed' : ' fail'}">${String(avgPassAtN)}%</div>
+		</div>
+		<div class="stat-card">
+			<div class="label">pass^${String(totalRuns)}</div>
+			<div class="value${avgPassHatN >= 80 ? ' pass' : avgPassHatN >= 50 ? ' mixed' : ' fail'}">${String(avgPassHatN)}%</div>
+		</div>
+		<div class="stat-card">
+			<div class="label">Runs</div>
+			<div class="value">${String(totalRuns)}</div>
+		</div>
+		<div class="stat-card">
+			<div class="label">Built (any run)</div>
+			<div class="value${builtCount === totalTestCases ? ' pass' : ' mixed'}">${String(builtCount)}/${String(totalTestCases)}</div>
+		</div>`;
+	} else {
+		const singlePassCount = allScenarios.filter((s) => s.passCount > 0).length;
+		const singleFailCount = totalScenarios - singlePassCount;
+		const passRate = totalScenarios > 0 ? Math.round((singlePassCount / totalScenarios) * 100) : 0;
+
+		dashboardHtml = `
+		<div class="stat-card">
+			<div class="label">Pass rate</div>
+			<div class="value${passRate >= 80 ? ' pass' : passRate >= 50 ? ' mixed' : ' fail'}">${String(passRate)}%</div>
+		</div>
+		<div class="stat-card">
+			<div class="label">Passed</div>
+			<div class="value pass">${String(singlePassCount)}</div>
+		</div>
+		<div class="stat-card">
+			<div class="label">Failed</div>
+			<div class="value${singleFailCount > 0 ? ' fail' : ''}">${String(singleFailCount)}</div>
+		</div>
+		<div class="stat-card">
+			<div class="label">Built</div>
+			<div class="value${builtCount === totalTestCases ? ' pass' : ' mixed'}">${String(builtCount)}/${String(totalTestCases)}</div>
+		</div>`;
+	}
+
+	const subtitle = isMultiRun
+		? `Generated ${new Date().toLocaleString()} &mdash; ${String(totalScenarios)} scenarios across ${String(totalTestCases)} test cases &times; ${String(totalRuns)} runs`
+		: `Generated ${new Date().toLocaleString()} &mdash; ${String(totalScenarios)} scenarios across ${String(totalTestCases)} test cases`;
+
+	const testCaseCards = isMultiRun
+		? testCases.map((tc, i) => renderTestCaseMultiRun(tc, i, totalRuns)).join('')
+		: testCases.map((tc, i) => renderTestCaseSingleRun(tc, i)).join('');
 
 	return `<!DOCTYPE html>
 <html lang="en">
@@ -338,6 +513,7 @@ export function generateWorkflowReport(results: WorkflowTestCaseResult[]): strin
 	.stat-card .value.pass { color: var(--color-pass); }
 	.stat-card .value.fail { color: var(--color-fail); }
 	.stat-card .value.mixed { color: var(--color-warn); }
+	.stat-card .stat-sub { color: var(--text-muted); font-size: 12px; }
 
 	/* Toolbar */
 	.toolbar { display: flex; gap: 8px; margin-bottom: 16px; }
@@ -358,7 +534,7 @@ export function generateWorkflowReport(results: WorkflowTestCaseResult[]): strin
 	.test-case.mixed { border-left: 3px solid var(--color-warn); }
 	.test-case-header { padding: 12px 16px; cursor: pointer; }
 	.test-case-header:hover { background: var(--bg-tertiary); }
-	.test-case-title { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+	.test-case-title { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; flex-wrap: wrap; }
 	.test-case-prompt { color: var(--text-primary); font-weight: 500; font-size: 13px; }
 	.test-case-meta { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
 	.workflow-id { color: var(--text-muted); font-size: 11px; font-family: monospace; }
@@ -366,6 +542,7 @@ export function generateWorkflowReport(results: WorkflowTestCaseResult[]): strin
 	.scenario-indicator { font-size: 11px; font-family: monospace; }
 	.scenario-indicator.pass { color: var(--color-pass); }
 	.scenario-indicator.fail { color: var(--color-fail); }
+	.scenario-indicator.mixed { color: var(--color-warn); }
 	.test-case-detail { display: none; padding: 0 16px 16px; }
 	.test-case.expanded .test-case-detail { display: block; }
 
@@ -381,11 +558,19 @@ export function generateWorkflowReport(results: WorkflowTestCaseResult[]): strin
 	.scenario-icon { font-weight: bold; font-size: 14px; min-width: 16px; }
 	.scenario-icon.pass { color: var(--color-pass); }
 	.scenario-icon.fail { color: var(--color-fail); }
+	.scenario-icon.mixed { color: var(--color-warn); }
 	.scenario-name { color: var(--text-primary); font-weight: 600; }
 	.scenario-desc { color: var(--text-muted); font-size: 12px; }
 	.scenario-summary-inline { color: var(--text-muted); font-size: 12px; flex: 1; }
+	.pass-rate-inline { color: var(--text-muted); font-size: 12px; font-family: monospace; }
 	.scenario-detail { display: none; padding: 10px 12px; border-top: 1px solid var(--border-light); background: var(--bg-primary); }
 	.scenario.expanded .scenario-detail { display: block; }
+
+	/* Run detail (multi-run) */
+	.run-detail { margin: 4px 0; border: 1px solid var(--border-light); border-radius: 4px; }
+	.run-detail > summary { cursor: pointer; padding: 6px 10px; font-size: 12px; color: var(--text-secondary); display: flex; align-items: center; gap: 6px; }
+	.run-detail > summary:hover { background: var(--bg-tertiary); }
+	.run-detail-content { padding: 8px 10px; border-top: 1px solid var(--border-light); }
 
 	/* Error and warning boxes */
 	.error-box { color: var(--color-fail); font-size: 12px; padding: 6px 10px; background: var(--color-fail-bg); border-radius: 4px; margin-bottom: 8px; border-left: 3px solid var(--color-fail); }
@@ -440,6 +625,17 @@ export function generateWorkflowReport(results: WorkflowTestCaseResult[]): strin
 	.category-fail { background: var(--color-fail-bg); color: var(--color-fail); border-left: 3px solid var(--color-fail); }
 	.category-info { background: #1c3a5e33; color: var(--color-info); border-left: 3px solid var(--color-info); }
 
+	/* pass@k tables */
+	.pass-k-table { margin: 8px 0; font-size: 11px; font-family: monospace; }
+	.pass-k-row { display: flex; gap: 8px; padding: 2px 0; }
+	.pass-k-row .pass-k-label { color: var(--text-muted); min-width: 70px; }
+	.pass-k-row span { color: var(--text-secondary); }
+	.pass-k-dashboard-table { width: 100%; border-collapse: collapse; font-size: 12px; font-family: monospace; margin-bottom: 24px; }
+	.pass-k-dashboard-table th, .pass-k-dashboard-table td { padding: 6px 12px; border: 1px solid var(--border); text-align: center; }
+	.pass-k-dashboard-table th { background: var(--bg-tertiary); color: var(--text-muted); font-weight: 600; }
+	.pass-k-dashboard-table td { background: var(--bg-secondary); color: var(--text-secondary); }
+	.pass-k-dashboard-table .pass-k-label { text-align: left; color: var(--text-muted); font-weight: 600; }
+
 	/* Utilities */
 	.muted { color: var(--text-muted); font-size: 12px; }
 </style>
@@ -447,25 +643,10 @@ export function generateWorkflowReport(results: WorkflowTestCaseResult[]): strin
 <body>
 
 <h1>Workflow evaluation report</h1>
-<p class="subtitle">Generated ${new Date().toLocaleString()} &mdash; ${String(totalScenarios)} scenarios across ${String(totalTestCases)} test cases</p>
+<p class="subtitle">${subtitle}</p>
 
 <div class="dashboard">
-	<div class="stat-card">
-		<div class="label">Pass rate</div>
-		<div class="value${passRate >= 80 ? ' pass' : passRate >= 50 ? ' mixed' : ' fail'}">${String(passRate)}%</div>
-	</div>
-	<div class="stat-card">
-		<div class="label">Passed</div>
-		<div class="value pass">${String(passCount)}</div>
-	</div>
-	<div class="stat-card">
-		<div class="label">Failed</div>
-		<div class="value${failCount > 0 ? ' fail' : ''}">${String(failCount)}</div>
-	</div>
-	<div class="stat-card">
-		<div class="label">Built</div>
-		<div class="value${builtCount === totalTestCases ? ' pass' : ' mixed'}">${String(builtCount)}/${String(totalTestCases)}</div>
-	</div>
+	${dashboardHtml}
 </div>
 
 <div class="toolbar">
@@ -474,7 +655,7 @@ export function generateWorkflowReport(results: WorkflowTestCaseResult[]): strin
 	<button onclick="document.querySelectorAll('.test-case').forEach(e => { e.style.display = e.classList.contains('pass') ? 'none' : '' }); this.classList.toggle('active')">Show failures only</button>
 </div>
 
-${results.map((r, i) => renderTestCase(r, i)).join('')}
+${testCaseCards}
 
 </body>
 </html>`;
@@ -484,12 +665,12 @@ ${results.map((r, i) => renderTestCase(r, i)).join('')}
 // Write report to disk
 // ---------------------------------------------------------------------------
 
-export function writeWorkflowReport(results: WorkflowTestCaseResult[]): string {
+export function writeWorkflowReport(evaluation: MultiRunEvaluation): string {
 	const reportDir = path.join(__dirname, '..', '..', '.data');
 	if (!fs.existsSync(reportDir)) {
 		fs.mkdirSync(reportDir, { recursive: true });
 	}
-	const html = generateWorkflowReport(results);
+	const html = generateWorkflowReport(evaluation);
 	const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 	const reportPath = path.join(reportDir, `workflow-eval-${timestamp}.html`);
 	fs.writeFileSync(reportPath, html);

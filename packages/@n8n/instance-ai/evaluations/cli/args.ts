@@ -12,6 +12,7 @@ import { z } from 'zod';
 // ---------------------------------------------------------------------------
 
 export interface CliArgs {
+	/** TimeoutMs is defined per run, not as the total timeout for all the runs */
 	timeoutMs: number;
 	baseUrl: string;
 	email?: string;
@@ -21,6 +22,8 @@ export interface CliArgs {
 	filter?: string;
 	/** Keep built workflows after evaluation instead of deleting them */
 	keepWorkflows: boolean;
+	/** Number of times to run each test case (default: 1) */
+	runs: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -35,6 +38,7 @@ const cliArgsSchema = z.object({
 	verbose: z.boolean().default(false),
 	filter: z.string().optional(),
 	keepWorkflows: z.boolean().default(false),
+	runs: z.number().int().positive().default(1),
 });
 
 // ---------------------------------------------------------------------------
@@ -53,6 +57,7 @@ export function parseCliArgs(argv: string[]): CliArgs {
 		verbose: validated.verbose,
 		filter: validated.filter,
 		keepWorkflows: validated.keepWorkflows,
+		runs: validated.runs,
 	};
 }
 
@@ -68,6 +73,7 @@ interface RawArgs {
 	verbose: boolean;
 	filter?: string;
 	keepWorkflows: boolean;
+	runs: number;
 }
 
 function parseRawArgs(argv: string[]): RawArgs {
@@ -76,6 +82,7 @@ function parseRawArgs(argv: string[]): RawArgs {
 		baseUrl: 'http://localhost:5678',
 		verbose: false,
 		keepWorkflows: false,
+		runs: 1,
 	};
 
 	for (let i = 0; i < argv.length; i++) {
@@ -113,6 +120,11 @@ function parseRawArgs(argv: string[]): RawArgs {
 
 			case '--keep-workflows':
 				result.keepWorkflows = true;
+				break;
+
+			case '--runs':
+				result.runs = parseIntArg(argv, i, '--runs');
+				i++;
 				break;
 
 			default:
