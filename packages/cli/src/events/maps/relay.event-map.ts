@@ -15,7 +15,7 @@ import type { ConcurrencyQueueType } from '@/concurrency/concurrency-control.ser
 
 import type { AiEventMap } from './ai.event-map';
 
-export type WorkflowActionSource = 'ui' | 'api' | 'n8n-mcp';
+export type WorkflowActionSource = 'ui' | 'api' | 'n8n-mcp' | 'n8n-cli';
 
 export type UserLike = {
 	id: string;
