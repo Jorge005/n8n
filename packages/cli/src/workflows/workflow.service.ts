@@ -792,10 +792,11 @@ export class WorkflowService {
 		workflowId: string,
 		options?: {
 			expectedChecksum?: string;
-			publicApi?: boolean;
 			source?: WorkflowActionSource;
 		},
 	): Promise<WorkflowEntity> {
+		const source = options?.source ?? 'ui';
+		const publicApi = source !== 'ui';
 		const workflow = await this.workflowFinderService.findWorkflowForUser(workflowId, user, [
 			'workflow:unpublish',
 		]);
@@ -851,9 +852,9 @@ export class WorkflowService {
 			user,
 			workflowId,
 			workflow,
-			publicApi: options?.publicApi ?? (options?.source !== undefined && options.source !== 'ui'),
+			publicApi,
 			deactivatedVersionId,
-			source: options?.source ?? 'ui',
+			source,
 		});
 
 		return workflow;
