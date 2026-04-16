@@ -176,3 +176,5 @@ minimumReleaseAgeExclude:
   - multer
   - simple-git
   - underscore
+  # Renovate security update: brace-expansion@2@5.0.5
+  - brace-expansion@2@5.0.5
