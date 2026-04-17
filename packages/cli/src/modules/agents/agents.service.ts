@@ -59,6 +59,21 @@ export interface ExecuteAgentData {
 	finishReason: string;
 }
 
+/**
+ * Attach the node-catalog tool bundle to an agent runtime when the agent's
+ * config allows it. Extracted so the gate can be unit-tested in isolation.
+ */
+export function attachNodeToolsIfEnabled(
+	agent: agents.Agent,
+	agentsToolsService: AgentsToolsService,
+	projectId: string,
+	credentialProvider: CredentialProvider,
+	enabled: boolean,
+): void {
+	if (!enabled) return;
+	agent.tool(agentsToolsService.getRuntimeTools(credentialProvider, projectId));
+}
+
 @Service()
 export class AgentsService {
 	/**
@@ -356,7 +371,7 @@ export class AgentsService {
 	 * Inject host-side singletons into an agent instance: the rich_interaction UI tool
 	 * and the n8n checkpoint storage. Workflow and node tools are resolved earlier via
 	 * `makeToolResolver()` inside `fromSchema()`; node-catalog tools are attached by
-	 * {@link attachNodeTools}.
+	 * {@link attachNodeToolsIfEnabled}.
 	 */
 	private async injectHostSingletons(agent: agents.Agent, agentId: string): Promise<void> {
 		try {
@@ -372,19 +387,6 @@ export class AgentsService {
 		if (!agent.hasCheckpointStorage()) {
 			agent.checkpoint(this.n8nCheckpointStorage);
 		}
-	}
-
-	/**
-	 * Attach the node-catalog tool bundle (search_nodes, get_node_types, list_credentials,
-	 * run_node_tool) so the agent can discover and execute n8n nodes at runtime.
-	 * The catalog is assumed to have been initialized at module startup.
-	 */
-	private attachNodeTools(
-		agent: agents.Agent,
-		projectId: string,
-		credentialProvider: CredentialProvider,
-	): void {
-		agent.tool(this.agentsToolsService.getRuntimeTools(credentialProvider, projectId));
 	}
 
 	/**
@@ -905,8 +907,16 @@ export class AgentsService {
 			memoryFactory: this.getMemoryFactory(),
 		});
 
+		const { isNodeToolsEnabled } = await import('./json-config/agent-json-config');
+
 		await this.injectHostSingletons(reconstructed, agentEntity.id);
-		this.attachNodeTools(reconstructed, agentEntity.projectId, credentialProvider);
+		attachNodeToolsIfEnabled(
+			reconstructed,
+			this.agentsToolsService,
+			agentEntity.projectId,
+			credentialProvider,
+			isNodeToolsEnabled(config.config),
+		);
 
 		return reconstructed;
 	}
