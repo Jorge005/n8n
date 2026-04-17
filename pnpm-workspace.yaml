@@ -176,3 +176,5 @@ minimumReleaseAgeExclude:
   - multer
   - simple-git
   - underscore
+  # Renovate security update: mjml@5.0.0
+  - mjml@5.0.0
