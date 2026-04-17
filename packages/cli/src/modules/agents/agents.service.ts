@@ -36,7 +36,7 @@ import type {
 	AgentJsonMemoryConfig,
 	AgentJsonToolConfig,
 } from './json-config/agent-json-config';
-import { AgentJsonConfigSchema } from './json-config/agent-json-config';
+import { AgentJsonConfigSchema, isNodeToolsEnabled } from './json-config/agent-json-config';
 import { AgentSecureRuntime } from './runtime/agent-secure-runtime';
 import { AgentsToolsService } from './agents-tools.service';
 import { AgentsCredentialProvider } from './adapters/agents-credential-provider';
@@ -906,8 +906,6 @@ export class AgentsService {
 			},
 			memoryFactory: this.getMemoryFactory(),
 		});
-
-		const { isNodeToolsEnabled } = await import('./json-config/agent-json-config');
 
 		await this.injectHostSingletons(reconstructed, agentEntity.id);
 		attachNodeToolsIfEnabled(
