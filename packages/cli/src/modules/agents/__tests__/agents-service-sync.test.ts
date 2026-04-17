@@ -13,6 +13,7 @@ import type { WorkflowFinderService } from '@/workflows/workflow-finder.service'
 import type { EphemeralNodeExecutor } from '@/node-execution';
 
 import { AgentsService } from '../agents.service';
+import type { AgentsToolsService } from '../agents-tools.service';
 import type { AgentRepository } from '../repositories/agent.repository';
 import type { N8NCheckpointStorage } from '../integrations/n8n-checkpoint-storage';
 import type { AgentSecureRuntime } from '../runtime/agent-secure-runtime';
@@ -65,6 +66,7 @@ describe('AgentsService — updateName / updateDescription schema sync', () => {
 			mock<N8NCheckpointStorage>(),
 			mock<AgentSecureRuntime>(),
 			mock<EphemeralNodeExecutor>(),
+			mock<AgentsToolsService>(),
 			mock<N8nMemory>(),
 			mock(),
 		);

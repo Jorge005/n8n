@@ -353,17 +353,12 @@ export class AgentsService {
 	}
 
 	/**
-	 * Inject platform-level tools and storage into an agent instance.
-	 * Workflow and node tools are resolved earlier via `makeToolResolver()` inside
-	 * `fromSchema()`, so this method only handles host-side singletons.
+	 * Inject host-side singletons into an agent instance: the rich_interaction UI tool
+	 * and the n8n checkpoint storage. Workflow and node tools are resolved earlier via
+	 * `makeToolResolver()` inside `fromSchema()`; node-catalog tools are attached by
+	 * {@link attachNodeTools}.
 	 */
-	private async injectRuntimeDependencies(
-		agent: agents.Agent,
-		agentId: string,
-		projectId: string,
-		credentialProvider: CredentialProvider,
-	): Promise<void> {
-		// Inject the rich_interaction tool for ad-hoc UI in chat integrations.
+	private async injectHostSingletons(agent: agents.Agent, agentId: string): Promise<void> {
 		try {
 			const { createRichInteractionTool } = await import('./integrations/rich-interaction-tool');
 			agent.tool(createRichInteractionTool());
@@ -374,33 +369,22 @@ export class AgentsService {
 			});
 		}
 
-		await this.attachNodeToolChain(agent, credentialProvider, agentId, projectId);
-
-		// Inject checkpoint storage
 		if (!agent.hasCheckpointStorage()) {
 			agent.checkpoint(this.n8nCheckpointStorage);
 		}
 	}
 
 	/**
-	 * Attaches tool chain to an agent instance, which enables it to discover and execute
-	 * n8n nodes as tools.
+	 * Attach the node-catalog tool bundle (search_nodes, get_node_types, list_credentials,
+	 * run_node_tool) so the agent can discover and execute n8n nodes at runtime.
+	 * The catalog is assumed to have been initialized at module startup.
 	 */
-	private async attachNodeToolChain(
+	private attachNodeTools(
 		agent: agents.Agent,
-		credentialProvider: CredentialProvider,
-		agentId: string,
 		projectId: string,
-	) {
-		try {
-			await this.agentsToolsService.initialize();
-			agent.tool(this.agentsToolsService.getTools(credentialProvider, projectId));
-		} catch (toolError) {
-			this.logger.warn('Failed to inject node-discovery tools', {
-				agentId,
-				error: toolError instanceof Error ? toolError.message : String(toolError),
-			});
-		}
+		credentialProvider: CredentialProvider,
+	): void {
+		agent.tool(this.agentsToolsService.getRuntimeTools(credentialProvider, projectId));
 	}
 
 	/**
@@ -921,12 +905,8 @@ export class AgentsService {
 			memoryFactory: this.getMemoryFactory(),
 		});
 
-		await this.injectRuntimeDependencies(
-			reconstructed,
-			agentEntity.id,
-			agentEntity.projectId,
-			credentialProvider,
-		);
+		await this.injectHostSingletons(reconstructed, agentEntity.id);
+		this.attachNodeTools(reconstructed, agentEntity.projectId, credentialProvider);
 
 		return reconstructed;
 	}

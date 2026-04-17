@@ -26,12 +26,8 @@ export class AgentsBuilderToolsService {
 		private readonly agentsService: AgentsService,
 		private readonly secureRuntime: AgentSecureRuntime,
 		private readonly workflowRepository: WorkflowRepository,
-		private readonly agentToolsService: AgentsToolsService,
+		private readonly agentsToolsService: AgentsToolsService,
 	) {}
-
-	async initialize(): Promise<void> {
-		await this.agentToolsService.initialize();
-	}
 
 	getTools(
 		agentId: string,
@@ -226,7 +222,7 @@ export class AgentsBuilderToolsService {
 		return [
 			buildCustomToolTool,
 			listWorkflowsTool,
-			...this.agentToolsService.getSharedTools(credentialProvider),
+			...this.agentsToolsService.getSharedTools(credentialProvider),
 		];
 	}
 }
