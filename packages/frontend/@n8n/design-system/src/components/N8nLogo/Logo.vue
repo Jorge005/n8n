@@ -78,7 +78,7 @@ onMounted(() => {
 }
 
 .large {
-	transform: scale(2);
+	transform: scale(1);
 	margin-bottom: var(--spacing--xl);
 
 	.logo,
