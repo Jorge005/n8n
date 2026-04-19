@@ -59,7 +59,6 @@ onMounted(() => {
 <template>
 	<div :class="containerClasses" data-test-id="n8n-logo">
 		<LogoIcon ref="logo" :class="$style.logo" />
-		// <LogoText v-if="showLogoText" :class="$style.logoText" />
 		<slot />
 	</div>
 </template>
