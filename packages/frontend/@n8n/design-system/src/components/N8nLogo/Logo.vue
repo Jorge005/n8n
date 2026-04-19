@@ -84,7 +84,7 @@ onMounted(() => {
 
 	.logo,
 	.logoText {
-		transform: scale(1.3) translateY(-2px);
+		transform: scale(0.3) translateY(1px);
 	}
 
 	.logoText {
