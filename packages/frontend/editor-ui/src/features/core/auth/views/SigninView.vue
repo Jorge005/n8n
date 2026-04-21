@@ -54,8 +54,8 @@ const emailLabel = computed(() => {
 const formConfig: IFormBoxConfig = reactive({
 	title: locale.baseText('auth.signin'),
 	buttonText: locale.baseText('auth.signin'),
-	redirectText: locale.baseText('forgotPassword'),
-	redirectLink: '/forgot-password',
+	//redirectText: locale.baseText('forgotPassword'),
+	//redirectLink: '/forgot-password',
 	inputs: [
 		{
 			name: 'emailOrLdapLoginId',
